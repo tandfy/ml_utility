@@ -44,7 +44,7 @@ def merge_annotated_img(lst_path_list, img_root_path_list, merged_root_path):
     from os import path
     import shutil
     from PIL import Image
-    from tqdm import tqdm
+    from tqdm import tqdm_notebook as tqdm
 
     assert len(lst_path_list) == len(img_root_path_list), "lst_path_listとimg_root_path_listの長さは同じのはず"
 
@@ -103,14 +103,14 @@ def resize_img_square(pil_img, edge_size, background_color=(0, 0, 0)):
     shorter_edge = min(pil_img.size)
 
     if longer_edge == shorter_edge:
-        return pil_img.resize(edge_size, edge_size)
+        return pil_img.resize((edge_size, edge_size))
     else:
         square_img = Image.new(pil_img.mode, (longer_edge, longer_edge), background_color)
         # 正方形の背景画像の左上に画像を配置
         square_img.paste(pil_img, (0,0))
         return square_img.resize((edge_size, edge_size))
 
-def process_image_for_classification(validate_ratio, img_augmentors, img_edge_size, input_lst_path, input_img_root_path, output_root_path, except_class_list=[]):
+def process_image_for_classification(validate_ratio, img_augmentors, img_edge_size, input_lst_path, input_img_root_path, output_root_path, except_class_list=[], test_ratio=0, validate_augment=True, test_augment=False):
     """
     画像分類に使用する画像とlstデータの加工
 
@@ -124,15 +124,16 @@ def process_image_for_classification(validate_ratio, img_augmentors, img_edge_si
     from os import path
     import shutil
     from PIL import Image
-    from tqdm import tqdm
+    from tqdm import tqdm_notebook as tqdm
     import numpy as np
 
-    assert validate_ratio < 1.0, "validate_ratio は1以下のはず" + str(validate_ratio)
+    assert validate_ratio + test_ratio < 1.0, "validate_ratio +test_ratioは1以下のはず {} , {}".format(validate_ratio, test_ratio)
 
     #マージした画像ファイルの出力先
     train_output_img_root_path = path.join(output_root_path, "train")
 
     val_output_img_root_path = path.join(output_root_path, "val")
+    test_output_img_root_path = path.join(output_root_path, "test")
 
 
     # 出力先をリセット
@@ -142,9 +143,11 @@ def process_image_for_classification(validate_ratio, img_augmentors, img_edge_si
     os.makedirs(output_root_path)
     os.makedirs(train_output_img_root_path)
     os.makedirs(val_output_img_root_path)
+    os.makedirs(test_output_img_root_path)
 
     val_cnt_dic = {}
     train_cnt_dic = {}
+    test_cnt_dic = {}
     with open(input_lst_path) as lst_f:
         for line in tqdm(lst_f.readlines()):
             line = line.strip()
@@ -156,10 +159,11 @@ def process_image_for_classification(validate_ratio, img_augmentors, img_edge_si
 
             # 画像を読み込む
             origin_img = Image.open(img_path)
+            origin_img = origin_img.convert('RGB')
 
             # バウンディングボックスから該当オブジェクトを切り取る
-            img_height = origin_img.width
-            img_width = origin_img.height
+            img_width = origin_img.width
+            img_height = origin_img.height
             bbs = []
             for bb_index in range(len(label_data)//label_width):
                 # データ取得
@@ -182,23 +186,44 @@ def process_image_for_classification(validate_ratio, img_augmentors, img_edge_si
                 # カウンティング用辞書の初期化
                 if label not in val_cnt_dic:
                     val_cnt_dic[label] = 0
+                    test_cnt_dic[label] = 0
                     train_cnt_dic[label] = 0
 
                 # 指定した確率で検証用データとして割り当てる
-                if random.random() < validate_ratio:
+                rand_num = random.random()
+                if rand_num < validate_ratio: # 検証用
                     output_img_root_path = val_output_img_root_path
-                    val_cnt_dic[label] += aug_num
-                else:
+                    cnt_dic = val_cnt_dic
+                    is_augment = validate_augment
+
+                elif rand_num < test_ratio + validate_ratio: # テスト用
+                    output_img_root_path = test_output_img_root_path
+                    cnt_dic = test_cnt_dic
+                    is_augment = test_augment
+
+                else: # 学習用
                     output_img_root_path = train_output_img_root_path
-                    train_cnt_dic[label] += aug_num
+                    cnt_dic = train_cnt_dic
+                    is_augment = True # 学習用は確定で増幅する
+
 
                 # 保存先の確認
                 target_img_dir = path.join(output_img_root_path, label)
                 if not path.isdir(target_img_dir):
                     os.makedirs(target_img_dir)
 
+                #画像増幅が不要な場合はそのまま保存
+                if not is_augment or len(img_augmentors) == 0:
+                    after_img_name = "{0:05d}_{1:02d}_{2:02d}{3}".format(origin_img_index, bb_index+1, 1, path.splitext(img_path)[1])
+                    after_img_path = path.join(target_img_dir, after_img_name)
 
-                #画像
+                    # 増幅した画像を保存
+                    Image.fromarray(target_img_ar).save(after_img_path)
+                    cnt_dic[label] += 1
+                    continue
+
+
+                # 増幅処理
                 for aug_index, aug in enumerate(img_augmentors):
 
                     #画像増幅する
@@ -212,17 +237,22 @@ def process_image_for_classification(validate_ratio, img_augmentors, img_edge_si
                     # 増幅した画像を保存
                     Image.fromarray(aug_img).save(after_img_path)
 
+                    cnt_dic[label] += 1
+
+
 
     # 各ラベルごとのデータ数を出力
     train_cnt_all = 0
     val_cnt_all = 0
-    for label, train_cnt, val_cnt in zip(train_cnt_dic.keys(), train_cnt_dic.values(), val_cnt_dic.values()):
+    test_cnt_all = 0
+    for label, train_cnt, val_cnt, test_cnt in zip(train_cnt_dic.keys(), train_cnt_dic.values(), val_cnt_dic.values(), test_cnt_dic.values()):
         train_cnt_all += train_cnt
         val_cnt_all += val_cnt
-        print("label:\t{0}\n\ttrain_count:\t{1:d}\n\tval_count:\t{2:d}".format(label, train_cnt, val_cnt))
+        test_cnt_all += test_cnt
+        print("label:\t{0}\n\ttrain_count:\t{1:d}\n\tval_count:\t{2:d}\n\ttest_count:\t{3:d}".format(label, train_cnt, val_cnt, test_cnt))
 
-    print("tain data:\t{0:d}\nval data:\t{1:d}".format(train_cnt_all, val_cnt_all))
-    return {'train':train_cnt_all, 'val':val_cnt_all}
+    print("tain data:\t{0:d}\nval data:\t{1:d}\ntest data:\t{1:d}".format(train_cnt_all, val_cnt_all, test_cnt_all))
+    return {'train':train_cnt_all, 'val':val_cnt_all, 'test':test_cnt_all}
 
 def download_file(url, filepath=''):
     """
@@ -240,6 +270,7 @@ def __format_class(origin_class, class_map):
     """
     クラスをclass_mapに従って変換する
     """
+    if len(class_map) == 0: return origin_class
 
     for class_data in class_map:
         if origin_class in class_data['sub']:
@@ -248,7 +279,7 @@ def __format_class(origin_class, class_map):
     raise RuntimeError()
 
 
-def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, input_lst_path, input_img_root_path, output_root_path, class_map):
+def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, input_lst_path, input_img_root_path, output_root_path, class_map, test_ratio=0.0, validate_augment=True, test_augment=False):
     """
     物体検出に使用する画像とlstデータの加工
     画像増幅と、検証/学習用へのデータ分けを行う。
@@ -281,10 +312,11 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
     from PIL import Image
     import numpy as np
     import imgaug as ia
-    from tqdm import tqdm
+    from tqdm import tqdm_notebook as tqdm
 
 
-    assert validate_ratio < 1.0, "validate_ratio は1以下のはず" + str(validate_ratio)
+    assert validate_ratio + test_ratio < 1.0, "validate_ratio +test_ratioは1以下のはず {} , {}".format(validate_ratio, test_ratio)
+
 
     #マージしたlstファイルと画像ファイルの出力先
     train_output_lst_path = path.join(output_root_path, "train.lst")
@@ -292,6 +324,9 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
 
     val_output_lst_path = path.join(output_root_path, "val.lst")
     val_output_img_root_path = path.join(output_root_path, "val")
+
+    test_output_lst_path = path.join(output_root_path, "test.lst")
+    test_output_img_root_path = path.join(output_root_path, "test")
 
 
     # 出力先をリセット
@@ -301,9 +336,11 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
     os.makedirs(output_root_path)
     os.makedirs(train_output_img_root_path)
     os.makedirs(val_output_img_root_path)
+    os.makedirs(test_output_img_root_path)
 
     train_output_lst = []
     val_output_lst = []
+    test_output_lst = []
     with open(input_lst_path) as lst_f:
         for line in tqdm(lst_f.readlines()):
             line = line.strip()
@@ -313,32 +350,70 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
             origin_img_index, header_size, label_width, label_data, img_path = __read_lst(line)
             img_path = path.join(input_img_root_path, img_path)
 
+            
             # 画像を読み込む
-            target_img = np.array(resize_img_square(Image.open(img_path), img_edge_size))
+            origin_img = Image.open(img_path).convert('RGB')
+            img_height = origin_img.height
+            img_width = origin_img.width
+            max_edge = max(img_height, img_width)
+
+            # 画像を変換する
+            target_img = np.array(resize_img_square(origin_img, img_edge_size))
+            edge_correction = img_edge_size / max_edge
 
             # バウンディングボックスを生成
-            img_height = target_img.shape[0]
-            img_width = target_img.shape[1]
             bbs = []
             for bb_index in range(len(label_data)//label_width):
                 bbs.append(ia.BoundingBox(
-                    x1 = float(label_data[bb_index * label_width + 1]) * img_width,
-                    y1 = float(label_data[bb_index * label_width + 2]) * img_height,
-                    x2 = float(label_data[bb_index * label_width + 3]) * img_width,
-                    y2 = float(label_data[bb_index * label_width + 4]) * img_height
+                    x1 = float(label_data[bb_index * label_width + 1]) * img_width * edge_correction,
+                    y1 = float(label_data[bb_index * label_width + 2]) * img_height * edge_correction,
+                    x2 = float(label_data[bb_index * label_width + 3]) * img_width * edge_correction,
+                    y2 = float(label_data[bb_index * label_width + 4]) * img_height * edge_correction
                 ))
             bbs_on_img = ia.BoundingBoxesOnImage(bbs, shape = target_img.shape)
 
             # 指定した確率で検証用データとして割り当てる
-            if random.random() < validate_ratio:
+            random_num = random.random()
+            if random_num < validate_ratio: # 検証用
                 output_lst = val_output_lst
                 output_img_root_path = val_output_img_root_path
-            else:
+                is_augment = validate_augment
+            elif random_num < validate_ratio + test_ratio: # テスト用
+                output_lst = test_output_lst
+                output_img_root_path = test_output_img_root_path
+                is_augment = test_augment
+            else: # 学習用
                 output_lst = train_output_lst
                 output_img_root_path = train_output_img_root_path
+                is_augment = True
+
+            # 画像を増幅しない
+            if not is_augment or len(img_augmentors) == 0:
+                # そのまま画像を保存
+                after_img_name = "{0:05d}_{1:03d}{2}".format(origin_img_index, 1, path.splitext(img_path)[1])
+                after_img_path = path.join(output_img_root_path, after_img_name)
+                Image.fromarray(target_img).save(after_img_path)
+                
+                # ラベルデータを上書き
+                after_label_data = copy.deepcopy(label_data)
+                for bb_index in range(len(label_data)//label_width):
+                    after_label_data[bb_index * label_width] = str(__format_class(after_label_data[bb_index * label_width], class_map))
+                    after_label_data[bb_index * label_width + 1] = str(bbs_on_img.bounding_boxes[bb_index].x1 /  img_edge_size)
+                    after_label_data[bb_index * label_width + 2] = str(bbs_on_img.bounding_boxes[bb_index].y1 /  img_edge_size)
+                    after_label_data[bb_index * label_width + 3] = str(bbs_on_img.bounding_boxes[bb_index].x2 /  img_edge_size)
+                    after_label_data[bb_index * label_width + 4] = str(bbs_on_img.bounding_boxes[bb_index].y2 /  img_edge_size)
 
 
-            #画像
+                # 画像用のlst形式のテキストを作成
+                image_index = len(output_lst) + 1
+                lst_dat = __create_lst(after_img_name, image_index, after_label_data)
+                output_lst.append(lst_dat)
+                continue
+
+                
+                
+                
+            #画像の増幅処理
             for aug_index, aug in enumerate(img_augmentors):
 
                 #画像増幅する
@@ -351,19 +426,23 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
                 # 増幅した画像ファイル名
                 after_img_name = "{0:05d}_{1:03d}{2}".format(origin_img_index, aug_index+1, path.splitext(img_path)[1])
                 after_img_path = path.join(output_img_root_path, after_img_name)
-
+                
 
                 # 増幅した画像を保存
                 Image.fromarray(aug_img).save(after_img_path)
+                
+
 
                 # ラベルデータを上書き
                 aug_label_data = copy.deepcopy(label_data)
                 for bb_index in range(len(label_data)//label_width):
                     aug_label_data[bb_index * label_width] = str(__format_class(aug_label_data[bb_index * label_width], class_map))
-                    aug_label_data[bb_index * label_width + 1] = str(aug_bbs.bounding_boxes[bb_index].x1 /  img_width)
-                    aug_label_data[bb_index * label_width + 2] = str(aug_bbs.bounding_boxes[bb_index].y1 /  img_height)
-                    aug_label_data[bb_index * label_width + 3] = str(aug_bbs.bounding_boxes[bb_index].x2 /  img_width)
-                    aug_label_data[bb_index * label_width + 4] = str(aug_bbs.bounding_boxes[bb_index].y2 /  img_height)
+                    aug_label_data[bb_index * label_width + 1] = str(aug_bbs.bounding_boxes[bb_index].x1 /  img_edge_size)
+                    aug_label_data[bb_index * label_width + 2] = str(aug_bbs.bounding_boxes[bb_index].y1 /  img_edge_size)
+                    aug_label_data[bb_index * label_width + 3] = str(aug_bbs.bounding_boxes[bb_index].x2 /  img_edge_size)
+                    aug_label_data[bb_index * label_width + 4] = str(aug_bbs.bounding_boxes[bb_index].y2 /  img_edge_size)
+                    
+                    
 
 
                 # 増幅画像用のlst形式のテキストを作成
@@ -380,13 +459,18 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
     if len(val_output_lst) > 0:
         with open(val_output_lst_path, 'w') as out_f:
             out_f.write('\n'.join(val_output_lst))
+    if len(test_output_lst) > 0:
+        with open(test_output_lst_path, 'w') as out_f:
+            out_f.write('\n'.join(test_output_lst))
 
     train_cnt = len(train_output_lst)
     val_cnt = len(val_output_lst)
+    test_cnt = len(test_output_lst)
     print("train data: ",train_cnt)
     print("validation data: ", val_cnt)
+    print("test data: ", test_cnt)
 
-    return {'train':train_cnt, 'val':val_cnt}
+    return {'train':train_cnt, 'val':val_cnt, 'test':test_cnt}
 
 
 
@@ -397,6 +481,7 @@ def create_recordio_and_upload_to_s3(input_img_path, s3_bucket_name, output_s3_o
 
     import subprocess
     import boto3
+    from os import path
 
     # lstファイルとRecordIOを生成するツールをダウンロード
     script_path = './im2rec.py'
@@ -404,20 +489,20 @@ def create_recordio_and_upload_to_s3(input_img_path, s3_bucket_name, output_s3_o
 
 
     # 出力するlstファイルの接頭辞
-    lst_out_prefix = 'train'
+    out_prefix = path.basename(input_img_path)
 
     # lstファイル作成
-    subprocess.run("python {0} --list --recursive {1} {2}".format(script_path, lst_out_prefix, input_img_path), shell=True, check=True)
+    subprocess.run("python {0} --list --recursive {1} {2}".format(script_path, out_prefix, input_img_path), shell=True, check=True)
 
     # 分類用lstファイルのパス
-    lst_path = lst_out_prefix + '.lst'
+    lst_path = out_prefix + '.lst'
 
 
     # RecordIOファイル作成
     subprocess.run("python {0} --num-thread 4 --pack-label {1} {2}".format(script_path, lst_path, input_img_path), shell=True, check=True)
 
     # recのファイル名
-    rec_path = lst_out_prefix + '.rec'
+    rec_path = out_prefix + '.rec'
 
     # S3へアップロード
     s3 = boto3.resource('s3')
@@ -448,3 +533,236 @@ def create_recordio_and_upload_to_s3_from_lst(input_img_path, input_lst_path, s3
     s3 = boto3.resource('s3')
     s3.Bucket(s3_bucket_name).upload_file(rec_path, output_s3_obj_path)
 
+
+
+def __divide_decimal(num1, num2):
+    """
+    渡された数字をDecimal型として扱って、割り算する
+    """
+    from decimal import Decimal
+
+    return (Decimal(num1) / Decimal(num2))
+
+
+def __create_lst_from_pascalvoc(index, xml_path, sub_class_list, class_map):
+    """
+    pascalvoc形式のxmlファイルから画像のラベルデータを取得する
+    """
+    import xml.etree.ElementTree as ET
+    from re import sub
+    tree = ET.parse(xml_path)
+
+    root = tree.getroot()
+    img_name = root.find('filename').text
+
+    # 画像内に複数のバウンディングボックスは存在しない(ただ一つだけのデータのみが対象)
+    obj = root.find('object')
+    bndbox = obj.find('bndbox')
+
+    # 画像サイズ
+    size = root.find('size')
+    width = size.find('width').text
+    height = size.find('height').text
+
+
+    # そのラベルが属する親ラベル(例：カモメ→鳥)
+    label = sub('_\d+.*', '', img_name)
+    super_label = obj.find('name').text
+    xmin = bndbox.find('xmin').text
+    ymin = bndbox.find('ymin').text
+    xmax = bndbox.find('xmax').text
+    ymax = bndbox.find('ymax').text
+
+    # 画像分類用クラスデータリストが存在するか調べる
+    if label not in sub_class_list:
+        sub_class_list[label] = len(sub_class_list)
+
+    # マップデータに親クラスデータが存在するか調べる
+    super_label_id = -1
+
+    for super_cls_index, sup_cls_data in class_map.items():
+        if sup_cls_data['label'] == super_label:
+            super_label_id = super_cls_index
+            break
+
+    # 該当する親クラスが存在しないので、新規作成
+    if super_label_id == -1:
+        super_label_id = len(class_map)
+        class_map[super_label_id] = {
+            'label_id' : super_label_id,
+            'label' : super_label,
+            'sub' : {}
+        }
+
+    # サブクラスが存在していないのであれば、作成して入れる
+    if label not in class_map[super_label_id]['sub'].values():
+        class_map[super_label_id]['sub'][sub_class_list[label]] = label
+
+
+    # lst形式のデータ作成をおこなう
+    header_size = 2
+    label_width = 5
+    annotation_data = '\t'.join([
+        str(sub_class_list[label]),
+        str(__divide_decimal(xmin, width)),
+        str(__divide_decimal(ymin, height)),
+        str(__divide_decimal(xmax, width)),
+        str(__divide_decimal(ymax, height))
+    ])
+    return ('\t'.join([
+        str(index),
+        str(header_size),
+        str(label_width),
+        annotation_data,
+        img_name]), sub_class_list, class_map)
+
+
+def create_lst_from_pascalvoc_dir(input_path, output_path):
+    """
+    対象のディレクトリに入ってるPascalVOC形式のxmlからlstファイルとクラスデータを作成する
+    """
+    import json
+    import glob
+    import os
+    from os import path
+    import shutil
+    from tqdm import tqdm_notebook as tqdm
+
+    if path.isdir(output_path):
+        shutil.rmtree(output_path)
+    os.makedirs(output_path)
+
+
+    # .lst形式のアノテーションファイルの中身をリストで作成する
+    out_content_list = []
+    class_map = {}
+    sub_class_list = {}
+    img_index = 1
+    for file_path in tqdm(glob.glob(path.join(input_path, '*'))):
+        if path.splitext(file_path)[1] != '.xml':
+            continue
+
+        # xmlを読み込んでlst形式のデータに変換。クラスデータも更新する
+        lst_data, sub_class_list, class_map = __create_lst_from_pascalvoc(img_index, file_path, sub_class_list, class_map)
+        img_index += 1
+        out_content_list.append(lst_data)
+
+
+    output_lst_path = path.join(output_path, 'lst.lst')
+    output_class_path = path.join(output_path, 'class.json')
+
+    # 作成したデータを要素ごとに改行して書き出す
+    with open(output_lst_path, 'w') as out_f:
+        out_f.write('\n'.join(out_content_list))
+
+    with open(output_class_path, 'w') as out_f:
+        class_data = {
+            'class_list' : sub_class_list,
+            'class_map' : class_map
+        }
+        json.dump(class_data, out_f)
+
+        
+def classify_img(pil_img, classes, classifier):
+    """
+    画像を分類
+    クラス名と予測確率を返す。
+    """
+    import io
+    import numpy as np
+    from PIL import Image
+    import time
+    import imgmlutil # 自作のユーティリティパッケージ
+
+
+    pil_img = imgmlutil.resize_img_square(pil_img, 224)
+
+    # byte形式に変換
+    img_byte = io.BytesIO()
+    pil_img.save(img_byte, format='JPEG')
+    img_byte = img_byte.getvalue()
+
+    # 種類判別をするために画像分類器に投げる
+    response = classifier.predict(img_byte)
+
+    # 確率が高いものを選択
+    class_id = np.argmax(response)
+    class_name = str(class_id)
+    if class_id < len(classes):
+        class_name = classes[class_id]
+    return class_name, response[class_id]
+
+
+
+
+
+def classify_and_visualize_detection(img_file, dets, detection_class_map, classification_classes, classifier, thresh=0.6):
+        """
+        検出結果の可視化と分類
+        検出結果データ(prediction_result['predictions'][0]['prediction'])をもとに検出部分を切り取り、画像分類する。
+        その結果を可視化する。（バウンディングボックスと検出・分類結果のラベル）
+        """
+        import random
+        import matplotlib.pyplot as plt
+        import matplotlib.image as mpimg
+        from PIL import Image
+
+
+        img=mpimg.imread(img_file)
+        plt.imshow(img)
+        height = img.shape[0]
+        width = img.shape[1]
+        colors = dict()
+
+        #画像読み込む
+        pil_img = Image.open(img_file)
+        
+        # 検出結果毎に処理していく(thresh未満の確率のものは飛ばす)
+        for i, det in enumerate(dets):
+            (klass, score, x0, y0, x1, y1) = det
+            if score < thresh:
+                continue
+            cls_id = int(klass)
+            if cls_id not in colors:
+                colors[cls_id] = (random.random(), random.random(), random.random())
+                
+            #検出位置
+            xmin = int(x0 * width)
+            ymin = int(y0 * height)
+            xmax = int(x1 * width)
+            ymax = int(y1 * height)
+
+
+            class_name = str(cls_id)
+            classification_prob = -1
+            if detection_class_map and len(detection_class_map) > cls_id:
+                
+                # 検出部分を切り取って分類する
+                class_name = detection_class_map[cls_id]['label']
+
+                crop_img = pil_img.crop((xmin, ymin, xmax, ymax))
+                classification_class_name, classification_prob = classify_img(crop_img, classification_classes, classifier)
+                class_name += '_' + classification_class_name
+
+            #  分類によって色を分ける
+            if class_name not in colors:
+                colors[class_name] = (random.random(), random.random(), random.random())
+
+            # 枠を表示
+            rect = plt.Rectangle((xmin, ymin), xmax - xmin,
+                                 ymax - ymin, fill=False,
+                                 edgecolor=colors[cls_id],
+                                 linewidth=3.5)
+            plt.gca().add_patch(rect)
+
+            # 名称と確率を表示 (名称 予測確率)
+            label = '{:s} {:.3f}'.format(class_name, score)
+            if classification_prob > -1:
+                label += ' {:.3f}'.format(classification_prob)
+
+            plt.gca().text(xmin, ymin - 2,
+                            label,
+                            bbox=dict(facecolor=colors[class_name], alpha=0.5),
+                                    fontsize=12, color='white')
+        # 図を出力
+        plt.show()
