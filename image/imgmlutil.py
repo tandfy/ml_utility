@@ -350,7 +350,7 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
             origin_img_index, header_size, label_width, label_data, img_path = __read_lst(line)
             img_path = path.join(input_img_root_path, img_path)
 
-            
+
             # 画像を読み込む
             origin_img = Image.open(img_path).convert('RGB')
             img_height = origin_img.height
@@ -393,7 +393,7 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
                 after_img_name = "{0:05d}_{1:03d}{2}".format(origin_img_index, 1, path.splitext(img_path)[1])
                 after_img_path = path.join(output_img_root_path, after_img_name)
                 Image.fromarray(target_img).save(after_img_path)
-                
+
                 # ラベルデータを上書き
                 after_label_data = copy.deepcopy(label_data)
                 for bb_index in range(len(label_data)//label_width):
@@ -410,11 +410,13 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
                 output_lst.append(lst_dat)
                 continue
 
-                
-                
-                
+
+
+
             #画像の増幅処理
             for aug_index, aug in enumerate(img_augmentors):
+                # augmentorの変換方法を固定する(画像とバウンディングボックスそれぞれに対する変換方法を変えないようにするため)
+                aug = aug.to_deterministic()
 
                 #画像増幅する
                 aug_img = aug.augment_images([target_img])[0]
@@ -426,11 +428,11 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
                 # 増幅した画像ファイル名
                 after_img_name = "{0:05d}_{1:03d}{2}".format(origin_img_index, aug_index+1, path.splitext(img_path)[1])
                 after_img_path = path.join(output_img_root_path, after_img_name)
-                
+
 
                 # 増幅した画像を保存
                 Image.fromarray(aug_img).save(after_img_path)
-                
+
 
 
                 # ラベルデータを上書き
@@ -441,8 +443,8 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
                     aug_label_data[bb_index * label_width + 2] = str(aug_bbs.bounding_boxes[bb_index].y1 /  img_edge_size)
                     aug_label_data[bb_index * label_width + 3] = str(aug_bbs.bounding_boxes[bb_index].x2 /  img_edge_size)
                     aug_label_data[bb_index * label_width + 4] = str(aug_bbs.bounding_boxes[bb_index].y2 /  img_edge_size)
-                    
-                    
+
+
 
 
                 # 増幅画像用のlst形式のテキストを作成
@@ -662,7 +664,7 @@ def create_lst_from_pascalvoc_dir(input_path, output_path):
         }
         json.dump(class_data, out_f)
 
-        
+
 def classify_img(pil_img, classes, classifier):
     """
     画像を分類
@@ -716,7 +718,7 @@ def classify_and_visualize_detection(img_file, dets, detection_class_map, classi
 
         #画像読み込む
         pil_img = Image.open(img_file)
-        
+
         # 検出結果毎に処理していく(thresh未満の確率のものは飛ばす)
         for i, det in enumerate(dets):
             (klass, score, x0, y0, x1, y1) = det
@@ -725,7 +727,7 @@ def classify_and_visualize_detection(img_file, dets, detection_class_map, classi
             cls_id = int(klass)
             if cls_id not in colors:
                 colors[cls_id] = (random.random(), random.random(), random.random())
-                
+
             #検出位置
             xmin = int(x0 * width)
             ymin = int(y0 * height)
@@ -736,7 +738,7 @@ def classify_and_visualize_detection(img_file, dets, detection_class_map, classi
             class_name = str(cls_id)
             classification_prob = -1
             if detection_class_map and len(detection_class_map) > cls_id:
-                
+
                 # 検出部分を切り取って分類する
                 class_name = detection_class_map[cls_id]['label']
 
