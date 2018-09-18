@@ -279,7 +279,7 @@ def __format_class(origin_class, class_map):
     raise RuntimeError()
 
 
-def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, input_lst_path, input_img_root_path, output_root_path, class_map, test_ratio=0.0, validate_augment=True, test_augment=False):
+def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, input_lst_path, input_img_root_path, output_root_path, class_map=[], test_ratio=0.0, validate_augment=False, test_augment=False, check_flg=False):
     """
     物体検出に使用する画像とlstデータの加工
     画像増幅と、検証/学習用へのデータ分けを行う。
@@ -337,6 +337,11 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
     os.makedirs(train_output_img_root_path)
     os.makedirs(val_output_img_root_path)
     os.makedirs(test_output_img_root_path)
+
+    if check_flg:
+        check_output_img_root_path = path.join(output_root_path, "check")
+        os.makedirs(check_output_img_root_path)
+
 
     train_output_lst = []
     val_output_lst = []
@@ -432,6 +437,10 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
 
                 # 増幅した画像を保存
                 Image.fromarray(aug_img).save(after_img_path)
+
+                if check_flg:
+                    after_bb_img = aug_bbs.draw_on_image(aug_img)
+                    Image.fromarray(after_bb_img).save(path.join(check_output_img_root_path, after_img_name))
 
 
 
