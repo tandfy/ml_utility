@@ -315,8 +315,6 @@ def process_image_for_detection(validate_ratio, img_augmentors, img_edge_size, i
     from tqdm import tqdm_notebook as tqdm
 
 
-    assert validate_ratio + test_ratio < 1.0, "validate_ratio +test_ratioは1以下のはず {} , {}".format(validate_ratio, test_ratio)
-
 
     #マージしたlstファイルと画像ファイルの出力先
     train_output_lst_path = path.join(output_root_path, "train.lst")
